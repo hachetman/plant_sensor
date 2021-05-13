@@ -6,134 +6,153 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <Wire.h>
-// Replace the next variables with your SSID/Password combination
 
 WiFiClient espClient;
-PubSubClient client(espClient);
+IPAddress server(192, 168, 1, 161);
+
+PubSubClient client(server, 1883, espClient);
 long lastMsg = 0;
 char msg[50];
 int value = 0;
 
-// uncomment the following lines if you're using SPI
-/*#include <SPI.h>
-#define BME_SCK 18
-#define BME_MISO 19
-#define BME_MOSI 23
-#define BME_CS 5*/
+Adafruit_BME280 bme;
 
-// LED Pin
-const int ledPin = 4;
+int setup_wifi() {
+  int timeout = 0;
+  String hostname = "espressiv_" + WiFi.macAddress();
+  hostname.replace(":", "");
+  Serial.println(hostname);
 
-void setup_wifi() {
-  delay(10);
   // We start by connecting to a WiFi network
   Serial.println();
   Serial.print("Connecting to ");
-  Serial.println(ssid);
+  Serial.println(wifi_ssid);
+  Serial.println(WiFi.macAddress());
+  WiFi.setHostname(hostname.c_str());
+  WiFi.begin(wifi_ssid, wifi_password);
 
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED and (timeout < 20)) {
     delay(500);
     Serial.print(".");
+    timeout++;
   }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+    return 0;
+  } else {
+    Serial.println("WiFi not connected");
+    return -1;
+  }
 }
 
-void callback(char *topic, byte *message, unsigned int length) {
-  Serial.print("Message arrived on topic: ");
-  Serial.print(topic);
-  Serial.print(". Message: ");
-  String messageTemp;
+void callback(char *topic, byte *message, unsigned int length) {}
 
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)message[i]);
-    messageTemp += (char)message[i];
+void setup() {
+  unsigned status;
+  float temperature;
+  float humidity;
+  float pressure;
+  float bat_voltage = 0;
+  int sensor_voltage = 0;
+  pinMode(14, OUTPUT);
+  digitalWrite(14, HIGH);
+  Serial.begin(115200);
+  status = bme.begin(0x76, &Wire);
+  if (!status) {
+    Serial.println("Could not find a valid BME280 sensor, check wiring, "
+                   "address, sensor ID!");
+    Serial.print("SensorID was: 0x");
+    Serial.println(bme.sensorID(), 16);
+    Serial.print("        ID of 0xFF probably means a bad address, a BMP 180 "
+                 "or BMP 085\n");
+    Serial.print("   ID of 0x56-0x58 represents a BMP 280,\n");
+    Serial.print("        ID of 0x60 represents a BME 280.\n");
+    Serial.print("        ID of 0x61 represents a BME 680.\n");
+    ESP.deepSleep(20e6);
   }
+
+  bme.setSampling(Adafruit_BME280::MODE_NORMAL,
+                  Adafruit_BME280::SAMPLING_X1, // temperature
+                  Adafruit_BME280::SAMPLING_X1, // pressure
+                  Adafruit_BME280::SAMPLING_X1, // humidity
+                  Adafruit_BME280::FILTER_OFF,
+                  Adafruit_BME280::STANDBY_MS_1000);
+  Serial.println("-- Default Test --");
+  Serial.print("Temperature = ");
+  temperature = bme.readTemperature();
+  Serial.print(temperature);
+  Serial.println(" *C");
+
+  Serial.print("Pressure = ");
+  pressure = bme.readPressure() / 100.0F;
+  Serial.print(pressure);
+  Serial.println(" hPa");
+
+  Serial.print("Humidity = ");
+  humidity = bme.readHumidity();
+  Serial.print(humidity);
+  Serial.println(" %");
   Serial.println();
+  bat_voltage = float(analogRead(A0)) / 4096 * 6.66;
+  sensor_voltage = analogRead(A4);
+  Serial.print("Sensor = ");
+  Serial.print(sensor_voltage);
+  Serial.println();
+  digitalWrite(14, LOW);
 
-  // Feel free to add more if statements to control more GPIOs with MQTT
-
-  // If a message is received on the topic esp32/output, you check if the
-  // message is either "on" or "off". Changes the output state according to the
-  // message
-  if (String(topic) == "esp32/output") {
-    Serial.print("Changing output to ");
-    if (messageTemp == "on") {
-      Serial.println("on");
-      digitalWrite(ledPin, HIGH);
-    } else if (messageTemp == "off") {
-      Serial.println("off");
-      digitalWrite(ledPin, LOW);
-    }
-  }
-}
-
-void reconnect() {
-  // Loop until we're reconnected
-  while (!client.connected()) {
+  if (setup_wifi() == 0) {
+    // client.setCallback(callback);
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
-    if (client.connect("ESP8266Client")) {
+    if (client.connect("plant_sensor", mqtt_user, mqtt_password)) {
       Serial.println("connected");
-      // Subscribe
-      client.subscribe("esp32/output");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
     }
+    if (client.connected()) {
+      String hostname = "espressiv_" + WiFi.macAddress();
+      hostname.replace(":", "");
+      String topic = "tele/" + hostname + "/" + mqtt_bat_topic;
+      client.publish(topic.c_str(), String(bat_voltage).c_str());
+      espClient.flush();
+
+      topic = "tele/" + hostname + "/" + mqtt_temp_topic;
+      client.publish(topic.c_str(), String(temperature).c_str());
+      espClient.flush();
+
+      topic = "tele/" + hostname + "/" + mqtt_hum_topic;
+      client.publish(topic.c_str(), String(humidity).c_str());
+      espClient.flush();
+
+      topic = "tele/" + hostname + "/" + mqtt_press_topic;
+      client.publish(topic.c_str(), String(pressure).c_str());
+      espClient.flush();
+
+      topic = "tele/" + hostname + "/" + mqtt_soil_topic;
+      client.publish(topic.c_str(), String(sensor_voltage).c_str());
+      espClient.flush();
+
+      topic = "tele/" + hostname + "/" + mqtt_rssi_topic;
+      client.publish(topic.c_str(), String(WiFi.RSSI()).c_str());
+      espClient.flush();
+    }
+    client.disconnect();
+    espClient.flush();
+    delay(1000);
+    // delay(10);
+    // wait until connection is closed completely
+    while (client.state() != MQTT_DISCONNECTED) {
+      delay(10);
+    }
+    Serial.println("Send messages, sleeping zZz");
+  } else {
+    Serial.println("There was a connection Problem");
   }
-}
-void setup() {
-  Serial.begin(115200);
-  // default settings
-  // (you can also pass in a Wire library object like &Wire2)
-  // status = bme.begin();
-  setup_wifi();
-  client.setServer(mqtt_server, 1883);
-  client.setCallback(callback);
-
-  pinMode(ledPin, OUTPUT);
+  ESP.deepSleep(300e6);
 }
 
-void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();
-
-  long now = millis();
-  if (now - lastMsg > 5000) {
-    lastMsg = now;
-
-    // Temperature in Celsius
-    int temperature = 0;
-    // Uncomment the next line to set temperature in Fahrenheit
-    // (and comment the previous temperature line)
-    // temperature = 1.8 * bme.readTemperature() + 32; // Temperature in
-    // Fahrenheit
-
-    // Convert the value to a char array
-    char tempString[8];
-    dtostrf(temperature, 1, 2, tempString);
-    Serial.print("Temperature: ");
-    Serial.println(tempString);
-    client.publish("esp32/temperature", tempString);
-
-    int humidity = 0;
-
-    // Convert the value to a char array
-    char humString[8];
-    dtostrf(humidity, 1, 2, humString);
-    Serial.print("Humidity: ");
-    Serial.println(humString);
-    client.publish("esp32/humidity", humString);
-  }
-}
+void loop() {}
