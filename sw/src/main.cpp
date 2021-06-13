@@ -3,6 +3,7 @@
 #include <Adafruit_BME280.h>
 #include <Adafruit_Sensor.h>
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <Wire.h>
@@ -116,29 +117,20 @@ void setup() {
     if (client.connected()) {
       String hostname = "espressiv_" + WiFi.macAddress();
       hostname.replace(":", "");
-      String topic = "tele/" + hostname + "/" + mqtt_bat_topic;
-      client.publish(topic.c_str(), String(bat_voltage).c_str());
+      StaticJsonDocument<1024> doc;
+      doc["battery"] = bat_voltage;
+      doc["temperature"] = temperature;
+      doc["humidity"] = humidity;
+      doc["pressure"] = pressure;
+      doc["soil"] = sensor_voltage;
+      doc["rssi"] = WiFi.RSSI();
+      char buffer[256];
+      serializeJson(doc, buffer);
+      Serial.println(buffer);
+      String topic = "tele/" + hostname + "/" + mqtt_info_topic;
+      client.publish(topic.c_str(), buffer);
       espClient.flush();
-
-      topic = "tele/" + hostname + "/" + mqtt_temp_topic;
-      client.publish(topic.c_str(), String(temperature).c_str());
-      espClient.flush();
-
-      topic = "tele/" + hostname + "/" + mqtt_hum_topic;
-      client.publish(topic.c_str(), String(humidity).c_str());
-      espClient.flush();
-
-      topic = "tele/" + hostname + "/" + mqtt_press_topic;
-      client.publish(topic.c_str(), String(pressure).c_str());
-      espClient.flush();
-
-      topic = "tele/" + hostname + "/" + mqtt_soil_topic;
-      client.publish(topic.c_str(), String(sensor_voltage).c_str());
-      espClient.flush();
-
-      topic = "tele/" + hostname + "/" + mqtt_rssi_topic;
-      client.publish(topic.c_str(), String(WiFi.RSSI()).c_str());
-      espClient.flush();
+      delay(500);
     }
     client.disconnect();
     espClient.flush();
